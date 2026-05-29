@@ -3,19 +3,18 @@ import subprocess
 import sys
 import streamlit as st
 
-# Dynamically download the headless chromium browser files cleanly
+# Download the headless chromium binary files cleanly
 @st.cache_resource
 def install_playwright_browsers():
     try:
         if os.environ.get("STREAMLIT_RUNTIME_ENV") or not os.path.exists("/Users"):
-            # Only install the browser bundle (no deps via code)
             subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
     except Exception as e:
         st.error(f"Playwright Browser Sync Failed: {e}")
 
 install_playwright_browsers()
 
-# --- Your original scraper code goes below ---
+# --- Rest of your link checking code continues below ---
 import pandas as pd
 from playwright.sync_api import sync_playwright
 from urllib.parse import urlparse, urljoin

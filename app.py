@@ -1,8 +1,16 @@
+import os
+# Force Playwright to install its browser binaries if they are missing in the cloud container
+os.system("playwright install chromium")
+
 import streamlit as st
 import pandas as pd
 from playwright.sync_api import sync_playwright
 from urllib.parse import urlparse, urljoin
 import time
+
+import os
+# Force Playwright to install its browser binaries if they are missing in the cloud container
+os.system("playwright install chromium")
 
 # Set up page configuration
 st.set_page_config(page_title="Link Building Verifier", page_icon="🔗", layout="wide")

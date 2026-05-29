@@ -1,3 +1,5 @@
 streamlit
 pandas
 playwright
+playwright-stealth
+--implicit-str-concat

@@ -72,7 +72,7 @@ def normalize_url(url):
     return f"{parsed.netloc}{path}"
 
 def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs):
-    """Uses a real headless browser instance to handle dynamic JS sites and check rules."""
+    """Uses a real headless browser instance engineered to bypass 403 walls and parse Shadow DOMs."""
     pub_url = str(pub_url).strip()
     anchor = str(anchor).strip().lower()
     
@@ -85,36 +85,51 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
     context = None
     page = None
     try:
+        # Fortify context headers to look exactly like a real user desktop browser profile
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800}
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1440, "height": 900},
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1"
+            }
         )
         page = context.new_page()
 
-        # Optimize performance by skipping heavy assets
+        # Stop cloud container execution from downloading unnecessary layout assets
         def block_aggressively(route):
-            if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
+            if route.request.resource_type in ["image", "media", "font"]:
                 route.abort()
             else:
                 route.continue_()
         
         page.route("**/*", block_aggressively)
-        response = page.goto(pub_url, timeout=timeout_secs * 1000, wait_until="domcontentloaded")
+        
+        # Navigate and give the server ample time to negotiate anti-bot hands-shakes
+        response = page.goto(pub_url, timeout=timeout_secs * 1000, wait_until="networkidle")
         
         if not response or response.status != 200:
             status_code = response.status if response else "Unknown"
             return f"❌ Broken (HTTP {status_code})", "No", "No"
 
-        # Give complex SPA threads an extra moment to fully compile
-        time.sleep(2.5)
+        # Give Reddit/Quora script frameworks a moment to layout comments
+        time.sleep(3.0)
 
-        # 1. SHADOW-DOM DEEP EXTRACTION LOGIC
-        # This executes a recursive JavaScript script inside the page to pull text out of Reddit's custom elements
+        # 1. Safe Shadow DOM Extraction (Handles null objects gracefully)
         page_text_with_shadows = page.evaluate("""() => {
             function getDeepInnerText(node) {
                 let text = "";
+                if (!node) return text;
                 if (node.nodeType === Node.TEXT_NODE) {
-                    text += node.nodeValue;
+                    text += node.nodeValue || "";
                 }
                 if (node.childNodes) {
                     for (let child of node.childNodes) {
@@ -128,17 +143,19 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
                 }
                 return text;
             }
-            return getDeepInnerText(document.body).lower();
+            const rawText = getDeepInnerText(document.body);
+            return rawText ? rawText.toLowerCase() : "";
         }""")
 
-        if anchor not in page_text_with_shadows:
+        if not page_text_with_shadows or anchor not in page_text_with_shadows:
             return "❌ Anchor text not found on page", "No", "No"
         
         brand_present = "Yes"
 
-        # 2. Extract all hyperlinks (Playwright's evaluate engine automatically flattens open Shadow DOM deep links)
+        # 2. Extract Hyperlinks cleanly across open Shadow roots
         links = page.evaluate("""() => {
             function getAllLinks(node, foundLinks = []) {
+                if (!node) return foundLinks;
                 if (node.tagName === 'A' && node.href) {
                     foundLinks.push({
                         href: node.href,
@@ -183,7 +200,7 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
                     link_found_with_wrong_anchor = True
                     actual_anchor = link['text'].strip()
 
-        # 3. Final structural conditional routing
+        # 3. Final outcome presentation logic routing
         if has_target:
             if link_found_with_wrong_anchor:
                 return f"⚠️ Target linked, but used wrong anchor: '{actual_anchor}'", brand_present, "Partial"
@@ -196,7 +213,8 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
             return "✅ Mention Verified (Plain Text / Unlinked)", brand_present, "No"
 
     except Exception as e:
-        return f"❌ Browser Error/Timeout: {str(e)[:50]}...", "No", "No"
+        error_msg = str(e).replace('"', "'")
+        return f"❌ Browser Error/Timeout: {error_msg[:45]}...", "No", "No"
     finally:
         if page: page.close()
         if context: context.close()
@@ -247,7 +265,6 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
         results_df = pd.DataFrame(results)
         st.subheader("📊 Verification Results")
         
-        # Apply conditional coloring layout
         def style_status(val):
             if "✅" in str(val):
                 return 'background-color: #d4edda; color: #155724;'
@@ -262,7 +279,6 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
         except AttributeError:
             styled_results = results_df.style.applymap(style_status, subset=['Link Status'])
             
-        # Display with specific column sizes (Published URL set to 150px width limit)
         st.dataframe(
             styled_results, 
             use_container_width=True,

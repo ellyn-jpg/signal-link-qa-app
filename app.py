@@ -23,11 +23,11 @@ import time
 # Set up page configuration
 st.set_page_config(page_title="Link Building Verifier", page_icon="🔗", layout="wide")
 
-st.title("🔗 Link Building Status Verifier (Playwright)")
+st.title("🔗 Link Building Status Verifier")
 st.markdown("""
 Paste your data directly from Excel or Google Sheets into the table below. 
 * **If a Target Page is provided:** The tool verifies the anchor text exists AND points to that specific URL.
-* **If the Target Page is BLANK:** The tool simply verifies that the Anchor/Brand exists on the page (whether it is a link or plain text!).
+* **If the Target Page is BLANK:** The tool simply verifies that the Anchor/Brand exists on the page.
 """)
 
 # Define the default empty dataframe structure
@@ -48,7 +48,7 @@ with st.sidebar:
     """)
     st.markdown("---")
     timeout = st.slider("Page Wait Timeout (seconds)", min_value=5, max_value=30, value=15, 
-                        help="Time given to modern JavaScript heavy sites (like Reddit) to fully render content.")
+                        help="Time given to modern JavaScript heavy sites to fully render content.")
 
 # Data Editor interface allowing easy copy-paste
 st.subheader("📋 Input Worksheet Data")
@@ -72,7 +72,7 @@ def normalize_url(url):
     return f"{parsed.netloc}{path}"
 
 def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs):
-    """Uses a real headless browser instance to handle heavy JavaScript and check rules."""
+    """Uses a real headless browser instance to handle dynamic JS sites and check rules."""
     pub_url = str(pub_url).strip()
     anchor = str(anchor).strip().lower()
     
@@ -80,7 +80,7 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
     target_url = str(target_url).strip() if has_target else ""
 
     if not pub_url or not anchor:
-        return "⚠️ Missing Input Data", "N/A"
+        return "⚠️ Missing Input Data", "N/A", "N/A"
 
     context = None
     page = None
@@ -103,15 +103,18 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
         
         if not response or response.status != 200:
             status_code = response.status if response else "Unknown"
-            return f"❌ Broken (HTTP {status_code})", "No"
+            return f"❌ Broken (HTTP {status_code})", "No", "No"
 
         # Wait for dynamic element scripts to register
         time.sleep(1.5)
 
-        # 1. Broadly check if the anchor text is present anywhere on the page
+        # 1. Broadly check if the anchor text is present anywhere on the page (plain text check)
         body_text = page.locator("body").inner_text().lower()
         if anchor not in body_text:
-            return "❌ Anchor text not found on page", "No"
+            return "❌ Anchor text not found on page", "No", "No"
+        
+        # Keyword was found! Set presence tracker to Yes
+        brand_present = "Yes"
 
         # 2. Extract all hyperlinks from the page DOM via JavaScript evaluation
         links = page.evaluate("""() => {
@@ -141,26 +144,26 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
             # If user provided a target, evaluate exact matches
             if has_target:
                 if anchor in link_text and normalized_href == normalized_target:
-                    return "✅ Link Verified & Live", "Yes"
+                    return "✅ Link Verified & Live", brand_present, "Yes"
                 if normalized_href == normalized_target:
                     link_found_with_wrong_anchor = True
                     actual_anchor = link['text'].strip()
 
-        # 3. Final conditional routing
+        # 3. Final conditional routing based on Target Page availability
         if has_target:
             if link_found_with_wrong_anchor:
-                return f"⚠️ Target linked, but used wrong anchor: '{actual_anchor}'", "Partial"
+                return f"⚠️ Target linked, but used wrong anchor: '{actual_anchor}'", brand_present, "Partial"
             if anchor_is_linked_somewhere:
-                return f"⚠️ Anchor found, but links to wrong URL: {linked_to_url}", "Partial"
-            return "❌ Anchor exists as plain text, but is NOT hyperlinked", "No"
+                return f"⚠️ Anchor found, but links to wrong URL: {linked_to_url}", brand_present, "Partial"
+            return "❌ Anchor exists as plain text, but is NOT hyperlinked", brand_present, "No"
         else:
-            # Target Page was BLANK -> The mention is confirmed to exist, so this is a success!
+            # Target Page was BLANK -> Success because brand presence is verified!
             if anchor_is_linked_somewhere:
-                return f"✅ Mention Verified (Linked to: {linked_to_url})", "Yes"
-            return "✅ Mention Verified (Plain Text / Unlinked)", "No"
+                return f"✅ Mention Verified (Linked to: {linked_to_url})", brand_present, "Yes"
+            return "✅ Mention Verified (Plain Text / Unlinked)", brand_present, "No"
 
     except Exception as e:
-        return f"❌ Browser Error/Timeout: {str(e)[:50]}...", "No"
+        return f"❌ Browser Error/Timeout: {str(e)[:50]}...", "No", "No"
     finally:
         if page: page.close()
         if context: context.close()
@@ -183,7 +186,7 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
             browser = p.chromium.launch(headless=True)
             
             for index, row in valid_rows.iterrows():
-                status, link_detected = verify_link_with_browser(
+                status, brand_present, link_detected = verify_link_with_browser(
                     browser,
                     row["Published URL"], 
                     row["Anchor / Brand"], 
@@ -195,7 +198,8 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
                     "Published URL": row["Published URL"],
                     "Anchor / Brand": row["Anchor / Brand"],
                     "Target Page": row["Target Page"] if pd.notna(row["Target Page"]) else "",
-                    "Verification Status": status,
+                    "Link Status": status,
+                    "Anchor/Brand Present?": brand_present,
                     "Link Present?": link_detected
                 })
                 
@@ -210,6 +214,7 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
         results_df = pd.DataFrame(results)
         st.subheader("📊 Verification Results")
         
+        # Apply conditional coloring layout
         def style_status(val):
             if "✅" in str(val):
                 return 'background-color: #d4edda; color: #155724;'
@@ -220,13 +225,25 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
             return ''
 
         try:
-            styled_results = results_df.style.map(style_status, subset=['Verification Status'])
+            styled_results = results_df.style.map(style_status, subset=['Link Status'])
         except AttributeError:
-            styled_results = results_df.style.applymap(style_status, subset=['Verification Status'])
+            styled_results = results_df.style.applymap(style_status, subset=['Link Status'])
             
-        st.dataframe(styled_results, use_container_width=True)
+        # Display with specific column sizes (Published URL set to 50px width limit)
+        st.dataframe(
+            styled_results, 
+            use_container_width=True,
+            column_config={
+                "Published URL": st.column_config.TextColumn("Published URL", width=50),
+                "Anchor / Brand": st.column_config.TextColumn("Anchor / Brand"),
+                "Target Page": st.column_config.TextColumn("Target Page"),
+                "Link Status": st.column_config.TextColumn("Link Status"),
+                "Anchor/Brand Present?": st.column_config.TextColumn("Anchor/Brand Present?"),
+                "Link Present?": st.column_config.TextColumn("Link Present?"),
+            }
+        )
         
-        # Export download button
+        # Export download pipeline
         csv = results_df.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Download Results as CSV",

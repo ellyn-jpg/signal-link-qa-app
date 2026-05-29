@@ -18,10 +18,11 @@ install_playwright_browsers()
 import pandas as pd
 from playwright.sync_api import sync_playwright
 from urllib.parse import urlparse, urljoin
+from curl_cffi import requests as b_requests  # Stealth browser impersonator
 import time
 
 # Set up page configuration
-st.set_page_config(page_title="Link Building Verifier", page_icon="🔗", layout="wide")
+st.set_config = st.set_page_config(page_title="Link Building Verifier", page_icon="🔗", layout="wide")
 
 st.title("🔗 Link Building Status Verifier")
 st.markdown("""
@@ -37,7 +38,6 @@ DEFAULT_DF = pd.DataFrame(
     ]
 )
 
-# Instructions for the user
 with st.sidebar:
     st.header("💡 Quick Guide")
     st.markdown("""
@@ -72,7 +72,7 @@ def normalize_url(url):
     return f"{parsed.netloc}{path}"
 
 def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs):
-    """Uses a real headless browser instance engineered to bypass 403 walls and handle Reddit structures."""
+    """Uses advanced browser impersonation for Reddit/anti-bot walls and Playwright for standard sites."""
     pub_url = str(pub_url).strip()
     anchor = str(anchor).strip().lower()
     
@@ -82,59 +82,47 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
     if not pub_url or not anchor:
         return "⚠️ Missing Input Data", "No", "No"
 
-    # --- SPECIAL BYPASS ROUTINE FOR REDDIT LINKS ---
+    # =========================================================================
+    # 🕵️‍♂️ STEALTH ROUTINE FOR REDDIT LINKS (Bypasses Cloudflare / Data Center 403s)
+    # =========================================================================
     if "reddit.com" in pub_url.lower():
         try:
-            import requests
-            # Flatten URL and append the data pipeline suffix
-            json_url = pub_url.split('?')[0].rstrip('/') + '.json'
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            # Strip query strings and fetch clean raw data pipeline string
+            clean_url = pub_url.split('?')[0].rstrip('/')
+            json_url = clean_url + '.json'
             
-            res = requests.get(json_url, headers=headers, timeout=timeout_secs)
+            # Use curl_cffi to impersonate a precise, non-bot TLS signature
+            res = b_requests.get(json_url, impersonate="chrome120", timeout=timeout_secs)
+            
             if res.status_code == 200:
-                data = res.json()
-                # Stringify the entire raw JSON text thread to search for mentions/links
-                raw_json_string = str(data).lower()
+                raw_data_text = res.text.lower()
                 
-                if anchor not in raw_json_string:
+                if anchor not in raw_data_text:
                     return "❌ Anchor text not found on page", "No", "No"
                 
                 brand_present = "Yes"
                 
                 if has_target:
                     normalized_target = normalize_url(target_url)
-                    # Check if target URL exists in the string structure right next to the anchor text context
-                    if normalized_target in raw_json_string:
+                    if normalized_target in raw_data_text:
                         return "✅ Link Verified & Live", brand_present, "Yes"
                     return "❌ Anchor exists as plain text, but is NOT hyperlinked", brand_present, "No"
                 else:
-                    # No target requested, mention is verified
                     return "✅ Mention Verified (Reddit Feed)", brand_present, "Yes/No (Target Blank)"
             else:
-                # If the fallback fails, allow it to drop down to the standard browser engine run below
-                pass
-        except Exception:
-            pass # Fall through to Playwright if JSON parsing encounters a structural anomaly
+                return f"❌ Reddit Blocked Connection (HTTP {res.status_code})", "No", "No"
+        except Exception as e:
+            return f"❌ Reddit Fetch Error: {str(e)[:40]}...", "No", "No"
 
-    # --- STANDARD PLAYWRIGHT BROWSER ENGINE (Runs for Quora and other sites) ---
+    # =========================================================================
+    # 🌐 STANDARD PLAYWRIGHT BROWSER LOOP (Runs perfectly for Quora & regular blogs)
+    # =========================================================================
     context = None
     page = None
     try:
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={"width": 1440, "height": 900},
-            extra_http_headers={
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
-                "Upgrade-Insecure-Requests": "1"
-            }
+            viewport={"width": 1440, "height": 900}
         )
         page = context.new_page()
 
@@ -151,24 +139,19 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
             status_code = response.status if response else "Unknown"
             return f"❌ Broken (HTTP {status_code})", "No", "No"
 
-        time.sleep(3.0)
+        time.sleep(2.5)
 
+        # Extract elements from general DOM + Open Shadow Layers
         page_text_with_shadows = page.evaluate("""() => {
             function getDeepInnerText(node) {
                 let text = "";
                 if (!node) return text;
-                if (node.nodeType === Node.TEXT_NODE) {
-                    text += node.nodeValue || "";
-                }
+                if (node.nodeType === Node.TEXT_NODE) { text += node.nodeValue || ""; }
                 if (node.childNodes) {
-                    for (let child of node.childNodes) {
-                        text += getDeepInnerText(child);
-                    }
+                    for (let child of node.childNodes) { text += getDeepInnerText(child); }
                 }
                 if (node.shadowRoot) {
-                    for (let child of node.shadowRoot.childNodes) {
-                        text += getDeepInnerText(child);
-                    }
+                    for (let child of node.shadowRoot.childNodes) { text += getDeepInnerText(child); }
                 }
                 return text;
             }
@@ -185,20 +168,13 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
             function getAllLinks(node, foundLinks = []) {
                 if (!node) return foundLinks;
                 if (node.tagName === 'A' && node.href) {
-                    foundLinks.push({
-                        href: node.href,
-                        text: node.innerText || node.textContent || ''
-                    });
+                    foundLinks.push({ href: node.href, text: node.innerText || node.textContent || '' });
                 }
                 if (node.childNodes) {
-                    for (let child of node.childNodes) {
-                        getAllLinks(child, foundLinks);
-                    }
+                    for (let child of node.childNodes) { getAllLinks(child, foundLinks); }
                 }
                 if (node.shadowRoot) {
-                    for (let child of node.shadowRoot.childNodes) {
-                        getAllLinks(child, foundLinks);
-                    }
+                    for (let child of node.shadowRoot.childNodes) { getAllLinks(child, foundLinks); }
                 }
                 return foundLinks;
             }
@@ -282,7 +258,7 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
                 })
                 
                 current_progress = len(results) / total_rows
-                my_bar.progress(current_progress, text=f"Checking {len(results)} of {total_rows} pages using Chromium...")
+                my_bar.progress(current_progress, text=f"Checking {len(results)} of {total_rows} pages...")
             
             browser.close()
             
@@ -293,12 +269,9 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
         st.subheader("📊 Verification Results")
         
         def style_status(val):
-            if "✅" in str(val):
-                return 'background-color: #d4edda; color: #155724;'
-            elif "❌" in str(val):
-                return 'background-color: #f8d7da; color: #721c24;'
-            elif "⚠️" in str(val):
-                return 'background-color: #fff3cd; color: #856404;'
+            if "✅" in str(val): return 'background-color: #d4edda; color: #155724;'
+            elif "❌" in str(val): return 'background-color: #f8d7da; color: #721c24;'
+            elif "⚠️" in str(val): return 'background-color: #fff3cd; color: #856404;'
             return ''
 
         try:

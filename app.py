@@ -3,23 +3,19 @@ import subprocess
 import sys
 import streamlit as st
 
-# Force download browser files AND operating system level dependencies
+# Dynamically download the headless chromium browser files cleanly
 @st.cache_resource
 def install_playwright_browsers():
     try:
-        # Check if running in Streamlit Cloud environment
         if os.environ.get("STREAMLIT_RUNTIME_ENV") or not os.path.exists("/Users"):
-            # 1. Install chromium binary
+            # Only install the browser bundle (no deps via code)
             subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-            # 2. Install the low-level Linux OS packages Playwright needs to open the browser
-            subprocess.run([sys.executable, "-m", "playwright", "install-deps"], check=True)
     except Exception as e:
-        st.error(f"Playwright Sync Failed: {e}")
+        st.error(f"Playwright Browser Sync Failed: {e}")
 
-# Trigger the install function once at boot
 install_playwright_browsers()
 
-# --- Rest of your imports and original scraper code below ---
+# --- Your original scraper code goes below ---
 import pandas as pd
 from playwright.sync_api import sync_playwright
 from urllib.parse import urlparse, urljoin

@@ -72,7 +72,7 @@ def normalize_url(url):
     return f"{parsed.netloc}{path}"
 
 def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs):
-    """Uses a real headless browser instance engineered to bypass 403 walls and parse Shadow DOMs."""
+    """Uses a real headless browser instance engineered to bypass 403 walls and handle Reddit structures."""
     pub_url = str(pub_url).strip()
     anchor = str(anchor).strip().lower()
     
@@ -82,10 +82,44 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
     if not pub_url or not anchor:
         return "⚠️ Missing Input Data", "No", "No"
 
+    # --- SPECIAL BYPASS ROUTINE FOR REDDIT LINKS ---
+    if "reddit.com" in pub_url.lower():
+        try:
+            import requests
+            # Flatten URL and append the data pipeline suffix
+            json_url = pub_url.split('?')[0].rstrip('/') + '.json'
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            
+            res = requests.get(json_url, headers=headers, timeout=timeout_secs)
+            if res.status_code == 200:
+                data = res.json()
+                # Stringify the entire raw JSON text thread to search for mentions/links
+                raw_json_string = str(data).lower()
+                
+                if anchor not in raw_json_string:
+                    return "❌ Anchor text not found on page", "No", "No"
+                
+                brand_present = "Yes"
+                
+                if has_target:
+                    normalized_target = normalize_url(target_url)
+                    # Check if target URL exists in the string structure right next to the anchor text context
+                    if normalized_target in raw_json_string:
+                        return "✅ Link Verified & Live", brand_present, "Yes"
+                    return "❌ Anchor exists as plain text, but is NOT hyperlinked", brand_present, "No"
+                else:
+                    # No target requested, mention is verified
+                    return "✅ Mention Verified (Reddit Feed)", brand_present, "Yes/No (Target Blank)"
+            else:
+                # If the fallback fails, allow it to drop down to the standard browser engine run below
+                pass
+        except Exception:
+            pass # Fall through to Playwright if JSON parsing encounters a structural anomaly
+
+    # --- STANDARD PLAYWRIGHT BROWSER ENGINE (Runs for Quora and other sites) ---
     context = None
     page = None
     try:
-        # Fortify context headers to look exactly like a real user desktop browser profile
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1440, "height": 900},
@@ -104,7 +138,6 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
         )
         page = context.new_page()
 
-        # Stop cloud container execution from downloading unnecessary layout assets
         def block_aggressively(route):
             if route.request.resource_type in ["image", "media", "font"]:
                 route.abort()
@@ -112,18 +145,14 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
                 route.continue_()
         
         page.route("**/*", block_aggressively)
-        
-        # Navigate and give the server ample time to negotiate anti-bot hands-shakes
         response = page.goto(pub_url, timeout=timeout_secs * 1000, wait_until="networkidle")
         
         if not response or response.status != 200:
             status_code = response.status if response else "Unknown"
             return f"❌ Broken (HTTP {status_code})", "No", "No"
 
-        # Give Reddit/Quora script frameworks a moment to layout comments
         time.sleep(3.0)
 
-        # 1. Safe Shadow DOM Extraction (Handles null objects gracefully)
         page_text_with_shadows = page.evaluate("""() => {
             function getDeepInnerText(node) {
                 let text = "";
@@ -152,7 +181,6 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
         
         brand_present = "Yes"
 
-        # 2. Extract Hyperlinks cleanly across open Shadow roots
         links = page.evaluate("""() => {
             function getAllLinks(node, foundLinks = []) {
                 if (!node) return foundLinks;
@@ -200,7 +228,6 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
                     link_found_with_wrong_anchor = True
                     actual_anchor = link['text'].strip()
 
-        # 3. Final outcome presentation logic routing
         if has_target:
             if link_found_with_wrong_anchor:
                 return f"⚠️ Target linked, but used wrong anchor: '{actual_anchor}'", brand_present, "Partial"

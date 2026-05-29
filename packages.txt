@@ -1,1 +1,14 @@
-playwright
+libgbm1
+libnss3
+libatk1.0-0
+libatk-bridge2.0-0
+libcups2
+libdrm2
+libxkbcommon0
+libxcomposite1
+libxdamage1
+libxext6
+libxfixes3
+librandr2
+libgbm-dev
+libasound2

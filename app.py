@@ -3,7 +3,7 @@ import subprocess
 import sys
 import streamlit as st
 
-# Download the headless chromium binary files cleanly
+# Dynamically download the headless chromium browser files cleanly
 @st.cache_resource
 def install_playwright_browsers():
     try:
@@ -14,7 +14,7 @@ def install_playwright_browsers():
 
 install_playwright_browsers()
 
-# --- Rest of your link checking code continues below ---
+# --- Core Application Dependencies ---
 import pandas as pd
 from playwright.sync_api import sync_playwright
 from urllib.parse import urlparse, urljoin
@@ -23,10 +23,11 @@ import time
 # Set up page configuration
 st.set_page_config(page_title="Link Building Verifier", page_icon="🔗", layout="wide")
 
-st.title("🔗 Link Building Status Verifier (Playwright Powered)")
+st.title("🔗 Link Building Status Verifier (Playwright)")
 st.markdown("""
 Paste your data directly from Excel or Google Sheets into the table below. 
-This version uses a headless browser to accurately verify links on complex platforms like **Reddit, Quora, and Medium**.
+* **If a Target Page is provided:** The tool verifies the anchor text exists AND points to that specific URL.
+* **If the Target Page is BLANK:** The tool simply verifies that the Anchor/Brand exists on the page (whether it is a link or plain text!).
 """)
 
 # Define the default empty dataframe structure
@@ -40,7 +41,7 @@ DEFAULT_DF = pd.DataFrame(
 with st.sidebar:
     st.header("💡 Quick Guide")
     st.markdown("""
-    1. **Copy** 3 columns from your worksheet (Published URL, Anchor, Target URL).
+    1. **Copy** 3 columns from your worksheet.
     2. **Click** the first cell of the table on the right.
     3. **Paste (Ctrl+V / Cmd+V)** your data.
     4. Click **Run Verification Check**.
@@ -58,7 +59,7 @@ edited_df = st.data_editor(
     column_config={
         "Published URL": st.column_config.TextColumn("Published URL", help="e.g., https://reddit.com/r/..."),
         "Anchor / Brand": st.column_config.TextColumn("Anchor Term / Brand Name", help="e.g., BrandName"),
-        "Target Page": st.column_config.TextColumn("Target Page (Optional)", help="Leave blank if it should be unlinked plain text"),
+        "Target Page": st.column_config.TextColumn("Target Page (Optional)", help="Leave blank if you only care about a mention"),
     }
 )
 
@@ -71,7 +72,7 @@ def normalize_url(url):
     return f"{parsed.netloc}{path}"
 
 def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs):
-    """Uses a real headless browser instance to handle heavy JavaScript and bot security screens."""
+    """Uses a real headless browser instance to handle heavy JavaScript and check rules."""
     pub_url = str(pub_url).strip()
     anchor = str(anchor).strip().lower()
     
@@ -84,41 +85,35 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
     context = None
     page = None
     try:
-        # Create an isolated browser tab with a realistic user agent
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 800}
         )
         page = context.new_page()
 
-        # Optimization: Route requests to block heavy assets (images, media, fonts) to speed up execution
+        # Optimize performance by skipping heavy images/media assets
         def block_aggressively(route):
             if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
                 route.abort()
             else:
                 route.continue_()
         
-        # We allow documents and scripts so Reddit/Quora applications can run and render content
         page.route("**/*", block_aggressively)
-
-        # Navigate to target page and wait until network is mostly idle
         response = page.goto(pub_url, timeout=timeout_secs * 1000, wait_until="domcontentloaded")
         
-        # If site explicitly rejects connection completely
         if not response or response.status != 200:
             status_code = response.status if response else "Unknown"
             return f"❌ Broken (HTTP {status_code})", "No"
 
-        # Give dynamic content like React/Next.js an extra moment to complete rendering client-side links
+        # Wait for dynamic element scripts to register
         time.sleep(1.5)
 
-        # 1. Grab all text content of the page to check if the brand is even mentioned
+        # 1. Broadly check if the anchor text is present anywhere on the page
         body_text = page.locator("body").inner_text().lower()
         if anchor not in body_text:
             return "❌ Anchor text not found on page", "No"
 
-        # 2. Extract all hyperlinks on the page via JavaScript evaluation
-        # This bypasses shadow-dom issues often seen in modern web frameworks
+        # 2. Extract all hyperlinks from the page DOM via JavaScript evaluation
         links = page.evaluate("""() => {
             return Array.from(document.querySelectorAll('a')).map(a => ({
                 href: a.href,
@@ -138,11 +133,12 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
             normalized_href = normalize_url(absolute_href)
             link_text = link['text'].strip().lower()
 
-            # Track if our text exists inside a hyperlink structure anywhere
+            # Track if our brand name is inside ANY hyperlink on this page
             if anchor in link_text:
                 anchor_is_linked_somewhere = True
                 linked_to_url = absolute_href
 
+            # If user provided a target, evaluate exact matches
             if has_target:
                 if anchor in link_text and normalized_href == normalized_target:
                     return "✅ Link Verified & Live", "Yes"
@@ -150,7 +146,7 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
                     link_found_with_wrong_anchor = True
                     actual_anchor = link['text'].strip()
 
-        # 3. Final outcome routing logic
+        # 3. Final conditional routing
         if has_target:
             if link_found_with_wrong_anchor:
                 return f"⚠️ Target linked, but used wrong anchor: '{actual_anchor}'", "Partial"
@@ -158,19 +154,19 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
                 return f"⚠️ Anchor found, but links to wrong URL: {linked_to_url}", "Partial"
             return "❌ Anchor exists as plain text, but is NOT hyperlinked", "No"
         else:
+            # Target Page was BLANK -> The mention is confirmed to exist, so this is a success!
             if anchor_is_linked_somewhere:
-                return f"❌ Anchor found, but it IS hyperlinked to: {linked_to_url} (Expected Plain Text)", "Yes (Unwanted)"
-            return "✅ Plain Text Mention Verified (No Link)", "No"
+                return f"✅ Mention Verified (Linked to: {linked_to_url})", "Yes"
+            return "✅ Mention Verified (Plain Text / Unlinked)", "No"
 
     except Exception as e:
         return f"❌ Browser Error/Timeout: {str(e)[:50]}...", "No"
     finally:
-        # Always clean up the page and context tab
         if page: page.close()
         if context: context.close()
 
 
-# Action button
+# Action execution button
 if st.button("🚀 Run Playwright Verification Check", type="primary"):
     valid_rows = edited_df.dropna(subset=["Published URL", "Anchor / Brand"])
     valid_rows = valid_rows[(valid_rows["Published URL"] != "") & (valid_rows["Anchor / Brand"] != "")]
@@ -183,13 +179,10 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
         my_bar = st.progress(0, text=progress_text)
         total_rows = len(valid_rows)
 
-        # Initialize the Playwright session wrapper context manager
         with sync_playwright() as p:
-            # Launch Chromium in headless mode
             browser = p.chromium.launch(headless=True)
             
             for index, row in valid_rows.iterrows():
-                # Process individual link validation checks
                 status, link_detected = verify_link_with_browser(
                     browser,
                     row["Published URL"], 
@@ -206,16 +199,14 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
                     "Link Present?": link_detected
                 })
                 
-                # Update UI elements
                 current_progress = len(results) / total_rows
                 my_bar.progress(current_progress, text=f"Checking {len(results)} of {total_rows} pages using Chromium...")
             
-            # Close main global browser executable stream when completed
             browser.close()
             
         my_bar.empty()
         
-        # Present results
+        # Display Results Table
         results_df = pd.DataFrame(results)
         st.subheader("📊 Verification Results")
         
@@ -235,7 +226,7 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
             
         st.dataframe(styled_results, use_container_width=True)
         
-        # Download pipeline Setup
+        # Export download button
         csv = results_df.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Download Results as CSV",

@@ -80,7 +80,7 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
     target_url = str(target_url).strip() if has_target else ""
 
     if not pub_url or not anchor:
-        return "⚠️ Missing Input Data", "N/A", "N/A"
+        return "⚠️ Missing Input Data", "No", "No"
 
     context = None
     page = None
@@ -91,7 +91,7 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
         )
         page = context.new_page()
 
-        # Optimize performance by skipping heavy images/media assets
+        # Optimize performance by skipping heavy assets
         def block_aggressively(route):
             if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
                 route.abort()
@@ -105,23 +105,59 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
             status_code = response.status if response else "Unknown"
             return f"❌ Broken (HTTP {status_code})", "No", "No"
 
-        # Wait for dynamic element scripts to register
-        time.sleep(1.5)
+        # Give complex SPA threads an extra moment to fully compile
+        time.sleep(2.5)
 
-        # 1. Broadly check if the anchor text is present anywhere on the page (plain text check)
-        body_text = page.locator("body").inner_text().lower()
-        if anchor not in body_text:
+        # 1. SHADOW-DOM DEEP EXTRACTION LOGIC
+        # This executes a recursive JavaScript script inside the page to pull text out of Reddit's custom elements
+        page_text_with_shadows = page.evaluate("""() => {
+            function getDeepInnerText(node) {
+                let text = "";
+                if (node.nodeType === Node.TEXT_NODE) {
+                    text += node.nodeValue;
+                }
+                if (node.childNodes) {
+                    for (let child of node.childNodes) {
+                        text += getDeepInnerText(child);
+                    }
+                }
+                if (node.shadowRoot) {
+                    for (let child of node.shadowRoot.childNodes) {
+                        text += getDeepInnerText(child);
+                    }
+                }
+                return text;
+            }
+            return getDeepInnerText(document.body).lower();
+        }""")
+
+        if anchor not in page_text_with_shadows:
             return "❌ Anchor text not found on page", "No", "No"
         
-        # Keyword was found! Set presence tracker to Yes
         brand_present = "Yes"
 
-        # 2. Extract all hyperlinks from the page DOM via JavaScript evaluation
+        # 2. Extract all hyperlinks (Playwright's evaluate engine automatically flattens open Shadow DOM deep links)
         links = page.evaluate("""() => {
-            return Array.from(document.querySelectorAll('a')).map(a => ({
-                href: a.href,
-                text: a.innerText || ''
-            }));
+            function getAllLinks(node, foundLinks = []) {
+                if (node.tagName === 'A' && node.href) {
+                    foundLinks.push({
+                        href: node.href,
+                        text: node.innerText || node.textContent || ''
+                    });
+                }
+                if (node.childNodes) {
+                    for (let child of node.childNodes) {
+                        getAllLinks(child, foundLinks);
+                    }
+                }
+                if (node.shadowRoot) {
+                    for (let child of node.shadowRoot.childNodes) {
+                        getAllLinks(child, foundLinks);
+                    }
+                }
+                return foundLinks;
+            }
+            return getAllLinks(document.body);
         }""")
 
         normalized_target = normalize_url(target_url)
@@ -136,12 +172,10 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
             normalized_href = normalize_url(absolute_href)
             link_text = link['text'].strip().lower()
 
-            # Track if our brand name is inside ANY hyperlink on this page
             if anchor in link_text:
                 anchor_is_linked_somewhere = True
                 linked_to_url = absolute_href
 
-            # If user provided a target, evaluate exact matches
             if has_target:
                 if anchor in link_text and normalized_href == normalized_target:
                     return "✅ Link Verified & Live", brand_present, "Yes"
@@ -149,7 +183,7 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
                     link_found_with_wrong_anchor = True
                     actual_anchor = link['text'].strip()
 
-        # 3. Final conditional routing based on Target Page availability
+        # 3. Final structural conditional routing
         if has_target:
             if link_found_with_wrong_anchor:
                 return f"⚠️ Target linked, but used wrong anchor: '{actual_anchor}'", brand_present, "Partial"
@@ -157,7 +191,6 @@ def verify_link_with_browser(browser, pub_url, anchor, target_url, timeout_secs)
                 return f"⚠️ Anchor found, but links to wrong URL: {linked_to_url}", brand_present, "Partial"
             return "❌ Anchor exists as plain text, but is NOT hyperlinked", brand_present, "No"
         else:
-            # Target Page was BLANK -> Success because brand presence is verified!
             if anchor_is_linked_somewhere:
                 return f"✅ Mention Verified (Linked to: {linked_to_url})", brand_present, "Yes"
             return "✅ Mention Verified (Plain Text / Unlinked)", brand_present, "No"
@@ -229,12 +262,12 @@ if st.button("🚀 Run Playwright Verification Check", type="primary"):
         except AttributeError:
             styled_results = results_df.style.applymap(style_status, subset=['Link Status'])
             
-        # Display with specific column sizes (Published URL set to 50px width limit)
+        # Display with specific column sizes (Published URL set to 150px width limit)
         st.dataframe(
             styled_results, 
             use_container_width=True,
             column_config={
-                "Published URL": st.column_config.TextColumn("Published URL", width=50),
+                "Published URL": st.column_config.TextColumn("Published URL", width=150),
                 "Anchor / Brand": st.column_config.TextColumn("Anchor / Brand"),
                 "Target Page": st.column_config.TextColumn("Target Page"),
                 "Link Status": st.column_config.TextColumn("Link Status"),

@@ -1,33 +1,21 @@
 import os
-# Force Playwright to install its browser binaries if they are missing in the cloud container
-os.system("playwright install chromium")
-
-import streamlit as st
-import pandas as pd
-from playwright.sync_api import sync_playwright
-from urllib.parse import urlparse, urljoin
-import time
-
-import os
 import subprocess
 import sys
-
-# Force Streamlit Cloud to download Chromium AND its Linux system dependencies
-@st.cache_resource
-def install_playwright_dependencies():
-    try:
-        # Check if we are running in the cloud or locally
-        if os.environ.get("STREAMLIT_RUNTIME_ENV") or not os.path.exists("/Users"):
-            # Install chromium browser and its system-level OS dependencies
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium", "--with-deps"], check=True)
-    except Exception as e:
-        print(f"Playwright dependency installation skipped/failed: {e}")
-
-# We import streamlit here to use the cache decorator so it only runs ONCE at startup
 import streamlit as st
-install_playwright_dependencies()
 
-# --- Your original imports and app code continue here ---
+# Force download browser files dynamically during Streamlit Cloud initialization
+@st.cache_resource
+def install_playwright_browsers():
+    try:
+        # Check if running in Streamlit Cloud environment
+        if os.environ.get("STREAMLIT_RUNTIME_ENV") or not os.path.exists("/Users"):
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        st.error(f"Playwright Browser Sync Failed: {e}")
+
+install_playwright_browsers()
+
+# --- Rest of your imports and original scraper code below ---
 import pandas as pd
 from playwright.sync_api import sync_playwright
 from urllib.parse import urlparse, urljoin
